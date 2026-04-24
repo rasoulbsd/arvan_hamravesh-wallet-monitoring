@@ -1,0 +1,4 @@
+{
+  "balanceIrr": 4000000,
+  "note": "Copy to manual-balance.json and set HAMRAVESH_USE_MANUAL_BALANCE_FILE=true"
+}

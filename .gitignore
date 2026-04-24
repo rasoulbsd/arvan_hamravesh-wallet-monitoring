@@ -72,6 +72,11 @@ web_modules/
 # Yarn Integrity file
 .yarn-integrity
 
+# Hamravesh optional local balance (when using HAMRAVESH_USE_MANUAL_BALANCE_FILE)
+hamravesh/manual-balance.json
+# Playwright session (JWT cookies) from npm run hamravesh:export-session
+hamravesh/playwright-storage.json
+
 # dotenv environment variable files
 .env
 .env.development.local

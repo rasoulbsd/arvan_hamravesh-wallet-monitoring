@@ -1,7 +1,14 @@
 import axios from 'axios';
 import dotenv from 'dotenv';
 import fs from 'fs';
-import { SocksProxyAgent } from 'socks-proxy-agent';
+import {
+  getCheckMaxAttempts,
+  getProviderHttpMode,
+  mergeRequestConfig,
+  withDirectThenProxy,
+  sleep
+} from '../lib/provider-http.js';
+import { isTelegramEditMode } from '../lib/telegram-notify-mode.js';
 
 dotenv.config();
 
@@ -28,24 +35,12 @@ function debugLog(...args) {
   }
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function getProviderRequestConfig(config = {}) {
-  if (!SOCKS5_PROXY_URL) return config;
-  const agent = new SocksProxyAgent(SOCKS5_PROXY_URL);
-  return {
-    ...config,
-    httpAgent: agent,
-    httpsAgent: agent,
-    proxy: false
-  };
+function getProviderRequestConfig(extra = {}, useProxy) {
+  return mergeRequestConfig(extra, useProxy, SOCKS5_PROXY_URL);
 }
 
 function saveMessageId(id) {
   try {
-    // Ensure data directory exists
     const dataDir = './data';
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
@@ -88,8 +83,29 @@ function clearMessageLog() {
   }
 }
 
-async function login() {
-  debugLog('Calling Arvan login endpoint');
+function loadMsgLog() {
+  try {
+    if (!fs.existsSync(MSG_LOG)) return {};
+    return JSON.parse(fs.readFileSync(MSG_LOG, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function getFailureMessageId() {
+  return loadMsgLog()[PROVIDER_KEY]?.failureMessageId ?? null;
+}
+
+function setFailureMessageId(id) {
+  const data = loadMsgLog();
+  if (!data[PROVIDER_KEY]) data[PROVIDER_KEY] = { ids: [] };
+  if (!Array.isArray(data[PROVIDER_KEY].ids)) data[PROVIDER_KEY].ids = [];
+  data[PROVIDER_KEY].failureMessageId = id;
+  fs.writeFileSync(MSG_LOG, JSON.stringify(data), "utf8");
+}
+
+async function login(useProxy) {
+  debugLog('Calling Arvan login endpoint', useProxy ? '(SOCKS5)' : '(direct)');
   const res = await axios.post('https://dejban.arvancloud.ir/v1/auth/login', {
     email: EMAIL,
     password: PASSWORD,
@@ -102,11 +118,11 @@ async function login() {
       'x-redirect-uri': 'https://panel.arvancloud.ir/',
       'user-agent': 'Mozilla/5.0'
     }
-  }));
+  }, useProxy));
   return res.data.data;
 }
 
-async function refreshTokenPair(accessToken, refreshToken, defaultAccount) {
+async function refreshTokenPair(accessToken, refreshToken, defaultAccount, useProxy) {
   debugLog('Refreshing Arvan token pair');
   const authHeader = `Bearer ${accessToken}.${defaultAccount}`;
   const res = await axios.post('https://dejban.arvancloud.ir/v1/auth/refresh-token', {
@@ -116,11 +132,11 @@ async function refreshTokenPair(accessToken, refreshToken, defaultAccount) {
       Authorization: authHeader,
       'Accept-Language': 'en'
     }
-  }));
+  }, useProxy));
   return res.data.data.accessToken;
 }
 
-async function queryWallet(bearerToken) {
+async function queryWallet(bearerToken, useProxy) {
   debugLog('Fetching Arvan wallet balance');
   const res = await axios.get('https://napi.arvancloud.ir/resid/v1/wallets/me', getProviderRequestConfig({
     headers: {
@@ -129,11 +145,12 @@ async function queryWallet(bearerToken) {
       Origin: 'https://panel.arvancloud.ir',
       Referer: 'https://panel.arvancloud.ir/'
     }
-  }));
+  }, useProxy));
   return res.data.data;
 }
 
 async function notifyTelegram(balance) {
+  const editMode = isTelegramEditMode(process.env.ARVAN_TELEGRAM_NOTIFY_MODE);
   const formatted = (Number(balance) / 10).toLocaleString('en-US');
   const thresholdFormatted = (Number(THRESHOLD) / 10).toLocaleString('en-US');
   const msg = `*⚠️🟦 Arvan Wallet Low Balance*\n\n\`\`\`\nTreshold: ${thresholdFormatted} T\nCurrent Balance: ${formatted} T\n\`\`\``;
@@ -145,26 +162,51 @@ async function notifyTelegram(balance) {
   if (TOPIC_ID) payload.message_thread_id = parseInt(TOPIC_ID);
 
   const prevMsgIds = getSavedMessageIds();
-  let messageId;
-  if (prevMsgIds.length > 0) {
-    // Try to edit the last message
+  if (editMode && prevMsgIds.length > 0) {
     const prevMsgId = prevMsgIds[prevMsgIds.length - 1];
     try {
       await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
         ...payload,
         message_id: prevMsgId
       });
-      messageId = prevMsgId;
-    } catch (err) {
-      // If edit fails (e.g., message deleted), send a new one
-      const res = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, payload);
-      messageId = res.data.result.message_id;
+      return;
+    } catch {
+      // fall through to new message
     }
-  } else {
-    const res = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, payload);
-    messageId = res.data.result.message_id;
   }
-  saveMessageId(messageId);
+  const res = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, payload);
+  saveMessageId(res.data.result.message_id);
+}
+
+async function notifyTelegramCheckFailure(err) {
+  const editMode = isTelegramEditMode(process.env.ARVAN_TELEGRAM_NOTIFY_MODE);
+  const detail = err?.response?.data
+    ? JSON.stringify(err.response.data).slice(0, 2000)
+    : String(err?.message || err).slice(0, 2000);
+  const text = `⚠️ Arvan wallet check failed (HTTP mode: ${getProviderHttpMode()}, ${getCheckMaxAttempts()} rounds).\n${detail}`;
+  const payload = {
+    chat_id: CHAT_ID,
+    text
+  };
+  if (TOPIC_ID) payload.message_thread_id = parseInt(TOPIC_ID, 10);
+  try {
+    const fid = getFailureMessageId();
+    if (editMode && fid) {
+      try {
+        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
+          ...payload,
+          message_id: fid
+        });
+        return;
+      } catch {
+        // send new below
+      }
+    }
+    const res = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, payload);
+    setFailureMessageId(res.data.result.message_id);
+  } catch (e) {
+    console.warn('[WARN] Could not send failure Telegram:', e.message);
+  }
 }
 
 async function deleteOldMessages() {
@@ -184,31 +226,52 @@ async function deleteOldMessages() {
   clearMessageLog();
 }
 
+async function runArvanCheckWithProxy(useProxy) {
+  const { accessToken, refreshToken, defaultAccount } = await login(useProxy);
+  const newAccessToken = await refreshTokenPair(accessToken, refreshToken, defaultAccount, useProxy);
+  const wallet = await queryWallet(`${newAccessToken}.${defaultAccount}`, useProxy);
+  const balance = parseInt(wallet.totalBalance, 10);
+  console.log(`[${new Date().toISOString()}] Arvan Wallet Balance: ${balance.toLocaleString('en-US')} IRR`);
+
+  if (balance < THRESHOLD) {
+    console.log(`❗ Balance below threshold (${THRESHOLD})`);
+    await notifyTelegram(balance);
+  } else {
+    console.log(`✅ Balance is healthy. Deleting old alert messages if any.`);
+    await deleteOldMessages();
+  }
+}
+
 async function checkWalletOnce() {
   try {
-    debugLog('Starting wallet check cycle');
-    const { accessToken, refreshToken, defaultAccount } = await login();
-    const newAccessToken = await refreshTokenPair(accessToken, refreshToken, defaultAccount);
-    const wallet = await queryWallet(`${newAccessToken}.${defaultAccount}`);
-    const balance = parseInt(wallet.totalBalance, 10);
-    console.log(`[${new Date().toISOString()}] Arvan Wallet Balance: ${balance.toLocaleString('en-US')} IRR`);
-
-    if (balance < THRESHOLD) {
-      console.log(`❗ Balance below threshold (${THRESHOLD})`);
-      await notifyTelegram(balance);
-    } else {
-      console.log(`✅ Balance is healthy. Deleting old alert messages if any.`);
-      await deleteOldMessages();
+    const maxAttempts = getCheckMaxAttempts();
+    let lastErr;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await withDirectThenProxy(runArvanCheckWithProxy, SOCKS5_PROXY_URL, debugLog);
+        return true;
+      } catch (err) {
+        lastErr = err;
+        console.error(`[ERROR] Arvan attempt ${attempt}/${maxAttempts}`, err.response?.data || err.message);
+        if (attempt < maxAttempts) {
+          await sleep(RETRY_BASE_DELAY_MS);
+        }
+      }
     }
-    return true;
+    await notifyTelegramCheckFailure(lastErr);
+    return false;
   } catch (err) {
-    console.error('[ERROR]', err.response?.data || err.message);
+    await notifyTelegramCheckFailure(err);
     return false;
   }
 }
 
 async function startLoop() {
   console.log(`🔁 Starting Arvan wallet monitor. Interval: every ${CHECK_INTERVAL_HOURS}h`);
+  console.log(`🌐 Provider HTTP mode: ${getProviderHttpMode()} (PROVIDER_HTTP_MODE=auto|direct|proxy)`);
+  console.log(
+    `💬 Telegram notify: ${isTelegramEditMode(process.env.ARVAN_TELEGRAM_NOTIFY_MODE) ? "edit" : "new"} (ARVAN_TELEGRAM_NOTIFY_MODE=edit|new)`
+  );
   if (DEBUG_MODE) {
     console.log('🐛 DEBUG_MODE enabled: running immediately once with verbose logs.');
     await checkWalletOnce();

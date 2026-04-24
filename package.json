@@ -7,6 +7,9 @@
   "scripts": {
     "start:arvan": "node arvan/arvan-wallet-check.js",
     "start:hamravesh": "node hamravesh/hamravesh-monitor.js",
+    "start:hamravesh:monitor": "node hamravesh/hamravesh-monitor.js",
+    "start:hamravesh:export": "node hamravesh/export-hamravesh-session.mjs",
+    "hamravesh:export-session": "node hamravesh/export-hamravesh-session.mjs",
     "docker": "docker-compose up --build -d"
   },
   "author": "Arvan & Hamravesh Wallet Monitoring Team",
@@ -14,6 +17,8 @@
   "dependencies": {
     "axios": "^1.10.0",
     "dotenv": "^16.3.1",
+    "playwright": "^1.49.0",
+    "proxy-chain": "^2.7.1",
     "socks-proxy-agent": "^10.0.0"
   }
 }

@@ -22,7 +22,7 @@ ARVAN_TELEGRAM_BOT_TOKEN=your_arvancloud_telegram_bot_token
 ARVAN_TELEGRAM_CHAT_ID=your_arvancloud_telegram_chat_id
 ARVAN_TELEGRAM_TOPIC_ID=your_arvancloud_telegram_topic_id
 
-# Optional SOCKS5 proxy for provider API requests only
+# Optional SOCKS5 for provider APIs + Hamravesh browser export session
 SOCKS5_PROXY_URL=socks5://username:password@127.0.0.1:1080
 # Optional debug mode (runs immediately once with verbose logs)
 DEBUG_MODE=false
@@ -32,21 +32,27 @@ RETRY_BASE_DELAY_SECONDS=300
 # Hamravesh
 HAMRAVESH_EMAIL=your_hamravesh_email@example.com
 HAMRAVESH_PASSWORD=your_hamravesh_password
+HAMRAVESH_ACCESS_TOKEN=
+HAMRAVESH_COOKIE=
 HAMRAVESH_WALLET_THRESHOLD=1000000
 HAMRAVESH_TELEGRAM_BOT_TOKEN=your_hamravesh_telegram_bot_token
 HAMRAVESH_TELEGRAM_CHAT_ID=your_hamravesh_telegram_chat_id
 HAMRAVESH_TELEGRAM_TOPIC_ID=your_hamravesh_telegram_topic_id
-HAMRAVESH_COOKIE=your_hamravesh_cookie_string
+HAMRAVESH_CHECK_INTERVAL_HOURS=6
 
-# Common
-CHECK_INTERVAL_HOURS=6
+# Common (if your setup uses shared interval variables, adjust as needed)
+ARVAN_CHECK_INTERVAL_HOURS=6
 ```
 
 - Each provider can use a different Telegram bot, chat/group/channel, and threshold.
 - If you use a group or channel, set the correct chat ID and bot permissions.
-- `SOCKS5_PROXY_URL` is applied to provider API calls only (Arvan/Hamravesh), not Telegram API calls.
+- `PROVIDER_HTTP_MODE` / `PLAYWRIGHT_PROXY_MODE`: **`auto`** (default) = try **direct** then SOCKS; **`direct`** = never use SOCKS; **`proxy`** = SOCKS only (`SOCKS5_PROXY_URL` required). Playwright defaults to `PLAYWRIGHT_PROXY_MODE` or falls back to `PROVIDER_HTTP_MODE`. Telegram is never proxied.
+- `npm run start:hamravesh` runs the monitor with **integrated** Playwright refresh when `HAMRAVESH_MANUAL_AUTH_ONLY=true` (set `HAMRAVESH_PLAYWRIGHT_INTEGRATED=false` to disable). `npm run start:hamravesh:export` / `hamravesh:export-session` is the standalone browser export only.
+- `CHECK_MAX_ATTEMPTS` (default 3): full check rounds per schedule; if all fail, a **Telegram error** is sent (Arvan/Hamravesh use their own bot/chat from `.env`). `HTTP_REQUEST_TIMEOUT_MS` defaults to 120s.
+- **Playwright** (`playwright-hamravesh-login.mjs`): fills `#email` / `#password`, submits `button[name="login"]`, **re-clicks submit** up to `HAMRAVESH_LOGIN_SUBMIT_RETRIES` if the app does not leave `/login`. `HAMRAVESH_PLAYWRIGHT_HEADLESS` (default `true`). Any **uncaught** schedule failure in Arvan/Hamravesh ends with a **Telegram error** and then the normal next-interval wait.
 - `DEBUG_MODE=true` runs one immediate check with detailed logs and exits.
 - On errors, retries use exponential backoff starting from `RETRY_BASE_DELAY_SECONDS` up to your normal check interval.
+- **Hamravesh auth:** The JSON API uses `api.hamravesh.com` (not the `console.hamravesh.com` HTML shell). Password login may return **404** if Hamravesh removed that endpoint. Use a JWT from the `user` cookie: paste the full `Cookie` header as `HAMRAVESH_COOKIE` (**must include `user=`** — a curl of `/login` before you are logged in often lacks it), or set `HAMRAVESH_ACCESS_TOKEN`. **Browser helper:** run `npm install`, `npx playwright install chromium`, then `npm run hamravesh:export-session` — log in once; cookies are saved to `hamravesh/playwright-storage.json` (gitignored) and loaded automatically when `HAMRAVESH_COOKIE` is empty. You can also set `HAMRAVESH_COOKIE_FILE` or `HAMRAVESH_PLAYWRIGHT_STORAGE`. If the login API is gone, use `HAMRAVESH_MANUAL_AUTH_ONLY=true` or `HAMRAVESH_USE_MANUAL_BALANCE_FILE=true` with `manual-balance.example.json`.
 
 ## Usage
 
@@ -60,6 +66,7 @@ CHECK_INTERVAL_HOURS=6
   ```bash
   node hamravesh/hamravesh-monitor.js
   ```
+  Export console cookies (after `npx playwright install chromium`): `npm run hamravesh:export-session` (uses `SOCKS5_PROXY_URL` when set)
 
 ### Docker Compose
 
