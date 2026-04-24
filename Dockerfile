@@ -6,12 +6,12 @@ WORKDIR /app
 # Fixed path so Chromium is always found at runtime (not only under ~/.cache).
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
+# Lock dependency layers: npm ci + Playwright browsers only re-run when package*.json changes.
+# Application code is copied last so edits to sources (and files not in .dockerignore) do not reinstall Chromium.
 COPY package*.json ./
 RUN npm ci
+RUN npx playwright install --with-deps chromium
 
 COPY . .
-
-# Must run after COPY so browser revision matches the Playwright version in node_modules.
-RUN npx playwright install --with-deps chromium
 
 # No default CMD; docker-compose.yml will specify the command
