@@ -10,7 +10,6 @@ services:
       - ./data:/app/data
       - ./arvan:/app/arvan
       - ./lib:/app/lib
-      - ./data/sent-messages.json:/app/sent-messages.json
     restart: unless-stopped
 
   hamravesh-monitor:
@@ -19,7 +18,7 @@ services:
     env_file: .env
     command: node hamravesh/hamravesh-monitor.js
     volumes:
+      - ./data:/app/data
       - ./hamravesh:/app/hamravesh
       - ./lib:/app/lib
-      - ./data/sent-messages.json:/app/sent-messages.json
     restart: unless-stopped

@@ -221,13 +221,16 @@ async function deleteOldMessages() {
   if (!msgIds.length) return;
   for (const msgId of msgIds) {
     try {
-      await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage`, {
-        chat_id: CHAT_ID,
-        message_id: msgId
-      });
+      const delPayload = { chat_id: CHAT_ID, message_id: msgId };
+      if (TOPIC_ID) {
+        const tid = parseInt(String(TOPIC_ID).trim(), 10);
+        if (Number.isFinite(tid)) delPayload.message_thread_id = tid;
+      }
+      await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage`, delPayload);
       console.log(`✅ Deleted alert message: ${msgId}`);
     } catch (err) {
-      console.warn(`⚠️ Could not delete message ${msgId}:`, err.response?.data || err.message);
+      const desc = err.response?.data?.description || err.message;
+      console.warn(`⚠️ Could not delete message ${msgId}:`, desc);
     }
   }
   clearMessageLog();
