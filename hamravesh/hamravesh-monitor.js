@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from 'url';
+import { SocksProxyAgent } from 'socks-proxy-agent';
 
 // ES module __dirname workaround
 const __filename = fileURLToPath(import.meta.url);
@@ -21,10 +22,37 @@ const BOT_TOKEN = process.env.HAMRAVESH_TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.HAMRAVESH_TELEGRAM_CHAT_ID;
 const TOPIC_ID = process.env.HAMRAVESH_TELEGRAM_TOPIC_ID;
 const THRESHOLD = parseInt(process.env.HAMRAVESH_WALLET_THRESHOLD, 10);
-const CHECK_INTERVAL_HOURS = parseInt(process.env.HAMRAVESH_CHECK_INTERVAL_HOURS || '6', 10);
+const CHECK_INTERVAL_HOURS_RAW = Number.parseFloat(process.env.HAMRAVESH_CHECK_INTERVAL_HOURS || '6');
+const CHECK_INTERVAL_HOURS = Number.isFinite(CHECK_INTERVAL_HOURS_RAW) && CHECK_INTERVAL_HOURS_RAW > 0 ? CHECK_INTERVAL_HOURS_RAW : 6;
 const INTERVAL_MS = CHECK_INTERVAL_HOURS * 60 * 60 * 1000;
+const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
+const RETRY_BASE_DELAY_SECONDS_RAW = Number.parseInt(process.env.RETRY_BASE_DELAY_SECONDS || '300', 10);
+const RETRY_BASE_DELAY_SECONDS = Number.isFinite(RETRY_BASE_DELAY_SECONDS_RAW) && RETRY_BASE_DELAY_SECONDS_RAW > 0 ? RETRY_BASE_DELAY_SECONDS_RAW : 300;
+const RETRY_BASE_DELAY_MS = RETRY_BASE_DELAY_SECONDS * 1000;
 const MSG_LOG = './data/sent-messages.json';
 const PROVIDER_KEY = 'hamravesh';
+const SOCKS5_PROXY_URL = process.env.SOCKS5_PROXY_URL;
+
+function debugLog(...args) {
+  if (DEBUG_MODE) {
+    console.log('[DEBUG][hamravesh]', ...args);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getProviderRequestConfig(config = {}) {
+  if (!SOCKS5_PROXY_URL) return config;
+  const agent = new SocksProxyAgent(SOCKS5_PROXY_URL);
+  return {
+    ...config,
+    httpAgent: agent,
+    httpsAgent: agent,
+    proxy: false
+  };
+}
 
 function saveMessageId(id) {
   try {
@@ -91,6 +119,7 @@ function writeTokenCache(token) {
 }
 
 async function loginAndGetToken() {
+  debugLog('Calling Hamravesh login endpoint');
   const options = {
     method: "POST",
     url: LOGIN_URL,
@@ -102,7 +131,7 @@ async function loginAndGetToken() {
       password: PASSWORD
     }
   };
-  const response = await axios.request(options);
+  const response = await axios.request(getProviderRequestConfig(options));
   if (response.data && response.data.key) {
     writeTokenCache(response.data.key);
     return response.data.key;
@@ -111,6 +140,7 @@ async function loginAndGetToken() {
 }
 
 async function fetchProfile(token) {
+  debugLog('Fetching Hamravesh profile');
   const options = {
     method: "GET",
     url: PROFILE_URL,
@@ -119,7 +149,7 @@ async function fetchProfile(token) {
       authorization: `Token ${token}`
     }
   };
-  return axios.request(options);
+  return axios.request(getProviderRequestConfig(options));
 }
 
 async function notifyTelegram(balance) {
@@ -175,6 +205,7 @@ async function deleteOldMessages() {
 
 async function checkWalletOnce() {
   try {
+    debugLog('Starting wallet check cycle');
     let token = readTokenCache();
     let triedLogin = false;
     let profile;
@@ -207,15 +238,41 @@ async function checkWalletOnce() {
       console.log(`✅ Balance is healthy. Deleting old alert messages if any.`);
       await deleteOldMessages();
     }
+    return true;
   } catch (err) {
     console.error('[ERROR]', err.response?.data || err.message);
+    return false;
   }
 }
 
 async function startLoop() {
-  console.log(`🔁 Starting Hamravesh wallet monitor. Every ${CHECK_INTERVAL_HOURS}h`);
-  await checkWalletOnce();
-  setInterval(checkWalletOnce, INTERVAL_MS);
+  console.log(`🔁 Starting Hamravesh wallet monitor. Interval: every ${CHECK_INTERVAL_HOURS}h`);
+  if (DEBUG_MODE) {
+    console.log('🐛 DEBUG_MODE enabled: running immediately once with verbose logs.');
+    await checkWalletOnce();
+    return;
+  }
+
+  let consecutiveFailures = 0;
+  while (true) {
+    const cycleStart = Date.now();
+    const isSuccess = await checkWalletOnce();
+
+    let delayMs = INTERVAL_MS;
+    if (!isSuccess) {
+      consecutiveFailures += 1;
+      const backoffDelay = RETRY_BASE_DELAY_MS * (2 ** (consecutiveFailures - 1));
+      delayMs = Math.min(INTERVAL_MS, backoffDelay);
+      console.warn(`⚠️ Check failed (${consecutiveFailures} consecutive). Next retry in ${Math.round(delayMs / 1000)}s`);
+    } else {
+      consecutiveFailures = 0;
+    }
+
+    const elapsedMs = Date.now() - cycleStart;
+    const waitMs = Math.max(0, delayMs - elapsedMs);
+    debugLog(`Sleeping ${Math.round(waitMs / 1000)}s before next cycle`);
+    await sleep(waitMs);
+  }
 }
 
 startLoop(); 

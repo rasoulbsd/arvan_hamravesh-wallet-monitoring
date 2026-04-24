@@ -22,6 +22,13 @@ ARVAN_TELEGRAM_BOT_TOKEN=your_arvancloud_telegram_bot_token
 ARVAN_TELEGRAM_CHAT_ID=your_arvancloud_telegram_chat_id
 ARVAN_TELEGRAM_TOPIC_ID=your_arvancloud_telegram_topic_id
 
+# Optional SOCKS5 proxy for provider API requests only
+SOCKS5_PROXY_URL=socks5://username:password@127.0.0.1:1080
+# Optional debug mode (runs immediately once with verbose logs)
+DEBUG_MODE=false
+# Base delay before retrying after errors (prevents request storms)
+RETRY_BASE_DELAY_SECONDS=300
+
 # Hamravesh
 HAMRAVESH_EMAIL=your_hamravesh_email@example.com
 HAMRAVESH_PASSWORD=your_hamravesh_password
@@ -37,6 +44,9 @@ CHECK_INTERVAL_HOURS=6
 
 - Each provider can use a different Telegram bot, chat/group/channel, and threshold.
 - If you use a group or channel, set the correct chat ID and bot permissions.
+- `SOCKS5_PROXY_URL` is applied to provider API calls only (Arvan/Hamravesh), not Telegram API calls.
+- `DEBUG_MODE=true` runs one immediate check with detailed logs and exits.
+- On errors, retries use exponential backoff starting from `RETRY_BASE_DELAY_SECONDS` up to your normal check interval.
 
 ## Usage
 
