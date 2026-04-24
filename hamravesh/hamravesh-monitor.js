@@ -552,7 +552,8 @@ async function runHamraveshApiCheck(useProxy) {
   }
 }
 
-async function checkWalletOnce() {
+/** @param {{ notifyFailure?: boolean }} [opts] If false, skips Telegram after all HTTP retries (e.g. backoff re-runs between scheduled intervals). */
+async function checkWalletOnce({ notifyFailure = true } = {}) {
   let lastErr;
   try {
     debugLog("Starting wallet check cycle");
@@ -628,12 +629,12 @@ async function checkWalletOnce() {
         await sleep(RETRY_BASE_DELAY_MS);
       }
     }
-    await notifyTelegramCheckFailure(lastErr);
+    if (notifyFailure) await notifyTelegramCheckFailure(lastErr);
     return false;
   } catch (err) {
     const xmlHint = explainHamraveshResponseError(err);
     console.error("[ERROR]", xmlHint || err.response?.data || err.message);
-    await notifyTelegramCheckFailure(err);
+    if (notifyFailure) await notifyTelegramCheckFailure(err);
     return false;
   }
 }
@@ -672,7 +673,8 @@ async function startLoop() {
   let consecutiveFailures = 0;
   while (true) {
     const cycleStart = Date.now();
-    const isSuccess = await checkWalletOnce();
+    // One failure Telegram per outage streak: not on each backoff retry before the next success.
+    const isSuccess = await checkWalletOnce({ notifyFailure: consecutiveFailures === 0 });
 
     let delayMs = INTERVAL_MS;
     if (!isSuccess) {
