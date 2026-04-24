@@ -10,6 +10,7 @@ import {
   withDirectThenProxy
 } from "../lib/provider-http.js";
 import { isTelegramEditMode } from "../lib/telegram-notify-mode.js";
+import { formatWalletCheckFailureHtml } from "../lib/telegram-check-failure-html.js";
 import { runPlaywrightHamraveshSessionSave } from "./playwright-hamravesh-login.mjs";
 
 // ES module __dirname workaround
@@ -439,8 +440,13 @@ async function notifyTelegramCheckFailure(err) {
     (err?.response?.data != null
       ? JSON.stringify(err.response.data).slice(0, 2000)
       : String(err?.message || err).slice(0, 2000));
-  const text = `⚠️ Hamravesh wallet check failed (HTTP mode: ${getProviderHttpMode()}, ${getCheckMaxAttempts()} rounds).\n${detail}`;
-  const payload = { chat_id: CHAT_ID, text };
+  const text = formatWalletCheckFailureHtml({
+    providerLabel: "Hamravesh",
+    httpMode: getProviderHttpMode(),
+    maxAttempts: getCheckMaxAttempts(),
+    detail
+  });
+  const payload = { chat_id: CHAT_ID, text, parse_mode: "HTML" };
   if (TOPIC_ID) payload.message_thread_id = parseInt(TOPIC_ID, 10);
   try {
     const fid = getFailureMessageId();

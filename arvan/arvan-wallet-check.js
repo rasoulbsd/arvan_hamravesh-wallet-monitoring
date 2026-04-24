@@ -9,6 +9,7 @@ import {
   sleep
 } from '../lib/provider-http.js';
 import { isTelegramEditMode } from '../lib/telegram-notify-mode.js';
+import { formatWalletCheckFailureHtml } from '../lib/telegram-check-failure-html.js';
 
 dotenv.config();
 
@@ -183,10 +184,16 @@ async function notifyTelegramCheckFailure(err) {
   const detail = err?.response?.data
     ? JSON.stringify(err.response.data).slice(0, 2000)
     : String(err?.message || err).slice(0, 2000);
-  const text = `⚠️ Arvan wallet check failed (HTTP mode: ${getProviderHttpMode()}, ${getCheckMaxAttempts()} rounds).\n${detail}`;
+  const text = formatWalletCheckFailureHtml({
+    providerLabel: "Arvan",
+    httpMode: getProviderHttpMode(),
+    maxAttempts: getCheckMaxAttempts(),
+    detail
+  });
   const payload = {
     chat_id: CHAT_ID,
-    text
+    text,
+    parse_mode: "HTML"
   };
   if (TOPIC_ID) payload.message_thread_id = parseInt(TOPIC_ID, 10);
   try {
